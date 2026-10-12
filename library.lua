@@ -1,10 +1,13 @@
--- Nocturne 1.5 | Native Roblox UI | Client-side ModuleScript
+-- Nocturne 1.6 | Native Roblox UI | Client-side ModuleScript
 -- No HTTP dependencies, hooks, game-specific behavior or external assets.
-local Library = {Version = "1.5.0"}
+local Library = {Version = "1.6.0"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
 local Http = game:GetService("HttpService")
+local runtimeEnv=type(getgenv)=="function"and getgenv()or _G
+runtimeEnv.NocturneWindowRegistry=runtimeEnv.NocturneWindowRegistry or {}
+local windowRegistry=runtimeEnv.NocturneWindowRegistry
 
 local Palette = {
     Background = Color3.fromRGB(29, 29, 34), Panel = Color3.fromRGB(24, 24, 29),
@@ -181,8 +184,14 @@ function Window:Toggle() return self:SetVisible(not self.Visible) end
 function Window:SetSize(width, height)
     assert(finite(width) and finite(height),"Invalid window size")
     local screen = self.Layer.AbsoluteSize
-    self.Width = math.clamp(width,math.min(380,screen.X-16),math.max(160,screen.X-16))
-    self.Height = math.clamp(height,math.min(320,screen.Y-16),math.max(160,screen.Y-16))
+    if self.AutoScale then
+        self.Width,self.Height=math.max(380,width),math.max(320,height)
+        self.Scale=math.min(1,math.max(1,screen.X-16)/self.Width,math.max(1,screen.Y-16)/self.Height)
+        self.RootScale.Scale=self.Scale
+    else
+        self.Width = math.clamp(width,math.min(380,screen.X-16),math.max(160,screen.X-16))
+        self.Height = math.clamp(height,math.min(320,screen.Y-16),math.max(160,screen.Y-16))
+    end
     self.Root.Size = UDim2.fromOffset(self.Width,self.Height)
     self:_ClampPosition()
     self:_ClosePopup()
@@ -191,7 +200,8 @@ end
 function Window:_ClampPosition()
     local screen = self.Layer.AbsoluteSize
     local p = self.Root.Position
-    self.Root.Position = UDim2.fromOffset(math.clamp(p.X.Offset,8,math.max(8,screen.X-self.Width-8)),math.clamp(p.Y.Offset,8,math.max(8,screen.Y-self.Height-8)))
+    local scale=self.Scale or 1
+    self.Root.Position = UDim2.fromOffset(math.clamp(p.X.Offset,8,math.max(8,screen.X-self.Width*scale-8)),math.clamp(p.Y.Offset,8,math.max(8,screen.Y-self.Height*scale-8)))
 end
 function Window:Notify(title, message, duration)
     if self.Destroyed then return end
@@ -222,6 +232,7 @@ function Window:Destroy()
         if control.Type=="Keybind" and control.Active then control:_Activate(false) end
     end
     self.Destroyed = true
+    if windowRegistry[self.SingletonKey]==self then windowRegistry[self.SingletonKey]=nil end
     for _, connection in ipairs(self._connections) do connection:Disconnect() end
     table.clear(self._connections)
     self.Screen:Destroy()
@@ -535,13 +546,24 @@ end
 
 function Library:CreateWindow(options)
     options = options or {}
+    local singletonKey=options.SingletonKey or "default"
+    if options.AllowMultiple~=true then
+        local previous=windowRegistry[singletonKey]
+        if previous and not previous.Destroyed then previous:Destroy()end
+        if singletonKey=="default"then
+            local legacy=runtimeEnv.NocturneDemo
+            if legacy and not legacy.Destroyed and type(legacy.Destroy)=="function"then legacy:Destroy()end
+        end
+    end
     local parent = options.Parent or Players.LocalPlayer:WaitForChild("PlayerGui")
     local self = setmetatable({Theme=copy(Palette),Font=options.Font or Enum.Font.Code,
         Flags={},Options={},Tabs={},Visible=true,Destroyed=false,_connections={},_popupConnections={},_popupItemConnections={},
         _themeNodes=setmetatable({},{__mode="k"}),_controls={},_nextFlag=0,Storage=options.Storage,
         ToggleKey=options.ToggleKey or Enum.KeyCode.Insert,OnUnload=options.OnUnload,
         Shading=options.Shading~=false,Shadows=options.Shadows~=false,Checkmarks=options.Checkmarks==true,
-        CompactHeader=options.CompactHeader~=false,_effectOptions=options.Effects},Window)
+        CompactHeader=options.CompactHeader~=false,_effectOptions=options.Effects,
+        Scrollable=options.Scrollable~=false,CompactControls=options.CompactControls==true,
+        AutoScale=options.AutoScale==true,SingletonKey=singletonKey},Window)
     if options.Theme then for k,v in pairs(options.Theme) do assert(Palette[k] and typeof(v)=="Color3","Invalid theme");self.Theme[k]=v end end
     if options.Accent then assert(typeof(options.Accent)=="Color3");self.Theme.Accent=options.Accent end
     self.Screen = self:_Node("ScreenGui",parent,{Name=options.Name or "Nocturne",ResetOnSpawn=false,IgnoreGuiInset=true,DisplayOrder=options.DisplayOrder or 80,ZIndexBehavior=Enum.ZIndexBehavior.Global})
@@ -550,6 +572,11 @@ function Library:CreateWindow(options)
     self.Width,self.Height = options.Width or 760,options.Height or 580
     local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280,720)
     self.Root = self:_Frame(self.Layer,{Name="Window",Size=UDim2.fromOffset(self.Width,self.Height),Position=UDim2.fromOffset(math.max(8,(viewport.X-self.Width)/2),math.max(8,(viewport.Y-self.Height)/2)),BackgroundColor3="@Background",Active=true})
+    if self.AutoScale then
+        self.RootScale=self:_Node("UIScale",self.Root,{Scale=1})
+        self:SetSize(self.Width,self.Height)
+        self.Root.Position=UDim2.fromOffset(math.max(8,(viewport.X-self.Width*self.Scale)/2),math.max(8,(viewport.Y-self.Height*self.Scale)/2))
+    end
     self:_Border(self.Root)
     self:_Shadow(self.Root)
     local inset=self:_Frame(self.Root,{Name="InsetBorder",Position=UDim2.fromOffset(7,7),Size=UDim2.new(1,-14,1,-14),BackgroundTransparency=1})
@@ -569,9 +596,9 @@ function Library:CreateWindow(options)
     self._subY=self._tabY+39
     self._pageY=self._tabY+44
     self._subPageY=self._tabY+85
-    self.TabBar = self:_Node("ScrollingFrame",self.Root,{Position=UDim2.fromOffset(16,self._tabY),Size=UDim2.new(1,-32,0,32),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=0,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.X,ScrollingDirection=Enum.ScrollingDirection.X})
+    self.TabBar = self:_Frame(self.Root,{Position=UDim2.fromOffset(16,self._tabY),Size=UDim2.new(1,-32,0,32),BackgroundTransparency=1,ClipsDescendants=true})
     self:_List(self.TabBar,1,true)
-    self.SubBar = self:_Node("ScrollingFrame",self.Root,{Position=UDim2.fromOffset(16,self._subY),Size=UDim2.new(1,-32,0,38),Visible=false,BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=0,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.X,ScrollingDirection=Enum.ScrollingDirection.X})
+    self.SubBar = self:_Frame(self.Root,{Position=UDim2.fromOffset(16,self._subY),Size=UDim2.new(1,-32,0,38),Visible=false,BackgroundTransparency=1,ClipsDescendants=true})
     self:_Connect(self.SubBar:GetPropertyChangedSignal("AbsoluteSize"),function()self:_FitSubTabs()end)
     self.PageHost = self:_Frame(self.Root,{Name="Pages",Position=UDim2.fromOffset(16,self._pageY),Size=UDim2.new(1,-32,1,-self._pageY-38),BackgroundTransparency=1})
     self:_Connect(self.TabBar:GetPropertyChangedSignal("AbsoluteSize"),function()self:_FitTabs()end)
@@ -579,6 +606,7 @@ function Library:CreateWindow(options)
     self.Footer = self:_Text(self.Root,options.Footer or "NOCTURNE  /  INSERT TO TOGGLE",{Position=UDim2.new(0,18,1,-24),Size=UDim2.new(1,-55,0,16),TextSize=10,TextColor3="@Muted"})
     self._footerText = self.Footer.Text
     local resize = self:_Text(self.Root,"◢",{Position=UDim2.new(1,-24,1,-25),Size=UDim2.fromOffset(22,22),TextColor3="@Muted",Active=true},"TextButton")
+    resize.Visible=options.Resizable~=false
     local startPos,startSize
     self:_Drag(titlebar,function(_,delta,begin)
         if begin then self:_ClosePopup();startPos=self.Root.Position end
@@ -653,12 +681,17 @@ function Library:CreateWindow(options)
     end)
     task.defer(function() if not self.Destroyed then self:SetSize(self.Width,self.Height) end end)
     self:_FXInitialize()
+    if options.AllowMultiple~=true then windowRegistry[singletonKey]=self end
     return self
 end
 
 function Window:_NewPage()
     local page=setmetatable({Window=self,Sections={}},Page)
-    page.Frame=self:_Node("ScrollingFrame",self.PageHost,{Size=UDim2.fromScale(1,1),Visible=false,BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3="@Border",CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollingDirection=Enum.ScrollingDirection.Y})
+    if self.Scrollable then
+        page.Frame=self:_Node("ScrollingFrame",self.PageHost,{Size=UDim2.fromScale(1,1),Visible=false,BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3="@Border",CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollingDirection=Enum.ScrollingDirection.Y})
+    else
+        page.Frame=self:_Frame(self.PageHost,{Size=UDim2.fromScale(1,1),Visible=false,BackgroundTransparency=1,ClipsDescendants=true})
+    end
     page.Full=self:_Frame(page.Frame,{Name="Full",Size=UDim2.new(1,-10,0,0),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1})
     page.Left=self:_Frame(page.Frame,{Name="Left",Size=UDim2.new(.5,-12,0,0),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1})
     page.Right=self:_Frame(page.Frame,{Name="Right",Size=UDim2.new(.5,-12,0,0),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1})
@@ -666,7 +699,7 @@ function Window:_NewPage()
     local function layout()
         local top=page.Full.AbsoluteSize.Y
         if #page.Full:GetChildren()>1 then top+=12 end
-        local narrow=page.Frame.AbsoluteSize.X<570
+        local narrow=self.Scrollable and page.Frame.AbsoluteSize.X<570
         page.Left.Size=UDim2.new(narrow and 1 or .5,narrow and -10 or -12,0,0)
         page.Right.Size=page.Left.Size
         page.Left.Position=UDim2.fromOffset(0,top)
@@ -681,16 +714,16 @@ end
 function Window:_FitTabs()
     local count=#self.Tabs
     if count==0 then return end
-    local width=math.max(86,(self.TabBar.AbsoluteSize.X-count+1)/count)
+    local width=math.max(1,(self.TabBar.Size.X.Scale*self.Width+self.TabBar.Size.X.Offset-count+1)/count)
     for _,tab in ipairs(self.Tabs)do tab.Button.Size=UDim2.fromOffset(width,30)end
 end
 function Window:_FitSubTabs()
     local tab=self.SelectedTab
     if not tab or #tab.SubTabs==0 then return end
     local count=#tab.SubTabs
-    local available=math.max(0,self.SubBar.AbsoluteSize.X-(count-1)*6)
-    local width=math.max(146,math.min(224,available/count))
-    for _,page in ipairs(tab.SubTabs)do page.Button.Size=UDim2.fromOffset(math.max(width,#page.Title*8+38),34)end
+    local available=math.max(0,self.SubBar.Size.X.Scale*self.Width+self.SubBar.Size.X.Offset-(count-1)*6)
+    local width=math.max(1,available/count)
+    for _,page in ipairs(tab.SubTabs)do page.Button.Size=UDim2.fromOffset(width,34)end
 end
 function Window:AddTab(name)
     local w=self
@@ -763,7 +796,7 @@ function Page:AddSection(options)
     section.Frame=w:_Frame(self[side],{Name=options.Name or "Section",Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,LayoutOrder=#self.Sections+1})
     w:_Border(section.Frame)
     w:_Node("UIPadding",section.Frame,{PaddingTop=UDim.new(0,12),PaddingBottom=UDim.new(0,12),PaddingLeft=UDim.new(0,12),PaddingRight=UDim.new(0,12)})
-    w:_List(section.Frame,8)
+    w:_List(section.Frame,w.CompactControls and 5 or 8)
     local header=w:_Frame(section.Frame,{Size=UDim2.new(1,0,0,27),BackgroundColor3="@Raised",LayoutOrder=0})
     w:_Bevel(header,true)
     w:_Text(header,options.Caption or options.Name or "Section",{Size=UDim2.fromScale(1,1),TextSize=12,TextXAlignment=Enum.TextXAlignment.Center})
@@ -773,6 +806,7 @@ end
 
 function Section:_Row(name,height,description)
     local w=self.Window
+    if w.CompactControls and height==26 then height=24 end
     local row=w:_Frame(self.Frame,{Name="Row_"..tostring(#self.Controls+1),Size=UDim2.new(1,0,0,height or 27),BackgroundTransparency=1,LayoutOrder=#self.Controls+1})
     local label=w:_Text(row,name or "",{Size=UDim2.new(1,0,0,24)})
     local addons=w:_Frame(row,{Name="Inline",Position=UDim2.new(1,0,0,0),AnchorPoint=Vector2.new(1,0),Size=UDim2.fromOffset(0,24),BackgroundTransparency=1})
@@ -870,14 +904,14 @@ function Section:AddSlider(options)
     local minimum,maximum=options.Min or 0,options.Max or 100
     local step=options.Step or 1
     assert(finite(minimum) and finite(maximum) and maximum>minimum and finite(step) and step>0,"Invalid slider range")
-    local h=self:_Row(options.Text or "Slider",52,options.Description)
+    local h=self:_Row(options.Text or "Slider",w.CompactControls and 42 or 52,options.Description)
     h.Label.Size=UDim2.new(1,-85,0,24)
     local valueBox=w:_Text(h.Row,"",{Position=UDim2.new(1,-80,0,0),Size=UDim2.fromOffset(80,24),TextXAlignment=Enum.TextXAlignment.Right,ClearTextOnFocus=false},"TextBox")
     local track=w:_Frame(h.Row,{Position=UDim2.fromOffset(0,33),Size=UDim2.new(1,0,0,5),BackgroundColor3="@Raised"})
     local fill=w:_Frame(track,{Size=UDim2.fromScale(0,1),BackgroundColor3="@Accent"})
     w:_Shade(fill,true);w:_Border(track,"OuterEdge")
     local knob=w:_Frame(track,{Position=UDim2.fromScale(0,0),AnchorPoint=Vector2.new(.5,.3),Size=UDim2.fromOffset(6,10),BackgroundColor3="@Text"})
-    local target=w:_Frame(h.Row,{Position=UDim2.fromOffset(0,24),Size=UDim2.new(1,0,0,24),BackgroundTransparency=1,Active=true})
+    local target=w:_Frame(h.Row,{Position=UDim2.fromOffset(0,24),Size=UDim2.new(1,0,0,w.CompactControls and 18 or 24),BackgroundTransparency=1,Active=true})
     local decimals=0
     while decimals<6 and math.abs(step*10^decimals-math.floor(step*10^decimals+.5))>1e-7 do decimals+=1 end
     local normalize=function(value)
