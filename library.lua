@@ -1,8 +1,8 @@
--- Nocturne 1.2 | Native Roblox UI | Client-side ModuleScript
--- No HTTP dependencies, hooks, game-specific behavior or external assets.
 local Library = {Version = "1.3.1"}
+local Library = {Version = "1.4.1"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
 local Http = game:GetService("HttpService")
 
 local Palette = {
@@ -31,7 +31,10 @@ local function hit(gui, position)
     local p, s = gui.AbsolutePosition, gui.AbsoluteSize
     return position.X >= p.X and position.X <= p.X+s.X and position.Y >= p.Y and position.Y <= p.Y+s.Y
 end
+-- AbsolutePosition and touch Position use the GUI inset coordinate space.
+-- GetMouseLocation uses screen coordinates, including the Roblox top bar.
 local function pointer() return Input:GetMouseLocation() end
+local function pointer() return Input:GetMouseLocation()-GuiService:GetGuiInset() end
 local function press(input)
     return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
 end
@@ -122,6 +125,7 @@ function Window:_Drag(surface, callback, scope)
         if not press(input) or self.Capture then return end
         local origin = input.UserInputType == Enum.UserInputType.Touch and Vector2.new(input.Position.X,input.Position.Y) or pointer()
         self.Drag = {Input=input, Origin=origin, Callback=callback}
+        self.Drag = {Input=input, Origin=origin, Callback=callback, Surface=surface}
         callback(origin, Vector2.zero, true)
     end, scope)
 end
@@ -164,12 +168,14 @@ function Window:SetTheme(theme)
     return self
 end
 function Window:SetVisible(visible)
+    assert(not self.Destroyed,"Window destroyed")
     assert(type(visible)=="boolean","Visible must be boolean")
     self.Visible, self.Root.Visible = visible, visible
     self.Drag = nil
     self:_ClosePopup()
     if not visible and self.Modal then self.Modal:Destroy();self.Modal=nil end
     if self.Capture then self.Capture:_CancelCapture() end
+    self:_FXRefresh(visible)
     return self
 end
 function Window:Toggle() return self:SetVisible(not self.Visible) end
@@ -204,6 +210,8 @@ end
 function Window:Destroy()
     if self.Destroyed or self._Destroying then return end
     self._Destroying=true
+    self.Visible=false
+    self:_FXDestroy()
     self:_ClosePopup()
     self.Drag = nil
     if self.Capture then self.Capture:_CancelCapture() end
@@ -217,6 +225,217 @@ function Window:Destroy()
     if self.OnUnload then pcall(self.OnUnload) end
 end
 
+-- All atmosphere objects belong to this window; none touches game lighting.
+local EffectDefaults={Dim=true,DimAmount=.42,Vignette=true,Glow=true,GlowStrength=.65,
+    GlowPulse=true,Particles=true,ParticleCount=32,ParticleSpeed=65,Cursor=true,
+    CursorStyle="Arrow",CursorSize=16,CursorTrail=true,ClickRipples=true,ReducedMotion=false}
+local EffectRanges={DimAmount={0,.8},GlowStrength={0,1},ParticleCount={0,64},
+    ParticleSpeed={10,200},CursorSize={10,24}}
+local function normalizedEffects(values,base)
+    assert(type(values)=="table","Effects must be a table")
+    local out=copy(base or EffectDefaults)
+    for key,value in pairs(values)do
+        assert(EffectDefaults[key]~=nil,"Unknown effect: "..tostring(key))
+        if EffectRanges[key] then
+            local range=EffectRanges[key]
+            assert(finite(value)and value>=range[1]and value<=range[2],"Invalid effect amount: "..key)
+            if key=="ParticleCount"then assert(value%1==0,"ParticleCount must be an integer")end
+        elseif key=="CursorStyle"then assert(value=="Arrow"or value=="Cross","Invalid cursor style")
+        else assert(type(value)=="boolean","Effect toggle must be boolean: "..key)end
+        out[key]=value
+    end
+    return out
+end
+local cursorUsers=setmetatable({},{__mode="k"})
+local cursorBaseline
+local function cursorClaim(window,enabled)
+    if enabled then
+        if not cursorUsers[window]then
+            if not next(cursorUsers)then cursorBaseline=Input.MouseIconEnabled end
+            cursorUsers[window]=true
+        end
+        Input.MouseIconEnabled=false
+    elseif cursorUsers[window]then
+        cursorUsers[window]=nil
+        if not next(cursorUsers)then
+            if Input.MouseIconEnabled==false and cursorBaseline~=nil then Input.MouseIconEnabled=cursorBaseline end
+            cursorBaseline=nil
+        end
+    end
+end
+function Window:_FXBackdrop()
+    self.Effects=normalizedEffects(self._effectOptions or {})
+    self._fxTime=0;self._fxFocused=true;self._fxRandom=Random.new()
+    self._fxRipples={};self._fxTrail={};self._fxParticles={}
+    self.Backdrop=self:_Frame(self.Layer,{Name="MenuBackdrop",Size=UDim2.fromScale(1,1),BackgroundColor3=Color3.new(),BackgroundTransparency=1,ZIndex=0})
+    self._fxVignette=self:_Frame(self.Layer,{Name="Vignette",Size=UDim2.fromScale(1,1),BackgroundTransparency=1,ZIndex=0})
+    local edges={
+        {UDim2.fromScale(0,0),UDim2.new(1,0,.18,0),90},
+        {UDim2.fromScale(0,.82),UDim2.new(1,0,.18,0),270},
+        {UDim2.fromScale(0,0),UDim2.new(.12,0,1,0),0},
+        {UDim2.fromScale(.88,0),UDim2.new(.12,0,1,0),180},
+    }
+    for _,edge in ipairs(edges)do
+        local frame=self:_Frame(self._fxVignette,{Position=edge[1],Size=edge[2],BackgroundColor3=Color3.new(),BackgroundTransparency=.6,ZIndex=0})
+        self:_Node("UIGradient",frame,{Rotation=edge[3],Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,0),NumberSequenceKeypoint.new(1,1)})})
+    end
+    self.ParticleLayer=self:_Frame(self.Layer,{Name="FallingLights",Size=UDim2.fromScale(1,1),BackgroundTransparency=1,ClipsDescendants=true,ZIndex=0})
+end
+function Window:_FXMakeParticles()
+    self.ParticleLayer:ClearAllChildren()
+    table.clear(self._fxParticles)
+    for _=1,self.Effects.ParticleCount do
+        local rng=self._fxRandom
+        local length=rng:NextNumber(7,17)
+        local streak=self:_Frame(self.ParticleLayer,{Name="Light",Size=UDim2.fromOffset(1,length),BackgroundColor3="@Accent",BackgroundTransparency=.25,ZIndex=0})
+        self:_Node("UIGradient",streak,{Rotation=90,Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(1,0)})})
+        self:_Frame(streak,{Position=UDim2.new(0,-.5,1,-2),Size=UDim2.fromOffset(2,2),BackgroundColor3="@Accent",BackgroundTransparency=.1,ZIndex=0})
+        self._fxParticles[#self._fxParticles+1]={Gui=streak,X=rng:NextNumber(0,1),Y=rng:NextNumber(-.1,1),Speed=rng:NextNumber(.5,1.4),Phase=rng:NextNumber(0,math.pi*2)}
+    end
+end
+function Window:_FXInitialize()
+    self._fxGlow=self:_Frame(self.Root,{Name="AmbientGlow",Size=UDim2.fromScale(1,1),BackgroundTransparency=1,ZIndex=0})
+    self._fxGlowLayers={}
+    for i=14,1,-1 do
+        local pad=i*2
+        local frame=self:_Frame(self._fxGlow,{Position=UDim2.fromOffset(-pad,-pad),Size=UDim2.new(1,pad*2,1,pad*2),BackgroundColor3="@Accent",BackgroundTransparency=1,ZIndex=0})
+        self._fxGlowLayers[#self._fxGlowLayers+1]={Gui=frame,Weight=.019*(1-i/18)}
+    end
+    self.CursorGui=self:_Frame(self.Layer,{Name="MenuCursor",Size=UDim2.fromOffset(16,20),BackgroundTransparency=1,ZIndex=1000})
+    -- Built-in antialiased arrow: its hotspot is at the texture center.
+    -- No upload or external image dependency is required.
+    self._fxArrow=self:_Node("ImageLabel",self.CursorGui,{Name="Arrow",Image="rbxasset://textures/Cursors/KeyboardMouse/ArrowFarCursor.png",
+        Position=UDim2.fromOffset(-32,-32),Size=UDim2.fromOffset(64,64),BackgroundTransparency=1,ZIndex=1001})
+    self._fxCross=self:_Frame(self.CursorGui,{Size=UDim2.fromOffset(16,16),BackgroundTransparency=1,ZIndex=1001})
+    self:_Frame(self._fxCross,{Position=UDim2.fromOffset(1,6),Size=UDim2.fromOffset(14,3),BackgroundColor3=Color3.new(),ZIndex=1002})
+    self:_Frame(self._fxCross,{Position=UDim2.fromOffset(6,1),Size=UDim2.fromOffset(3,14),BackgroundColor3=Color3.new(),ZIndex=1002})
+    self:_Frame(self._fxCross,{Position=UDim2.fromOffset(2,7),Size=UDim2.fromOffset(12,1),BackgroundColor3="@Accent",ZIndex=1003})
+    self:_Frame(self._fxCross,{Position=UDim2.fromOffset(7,2),Size=UDim2.fromOffset(1,12),BackgroundColor3="@Accent",ZIndex=1003})
+    self:_Node("UIScale",self.CursorGui,{Name="CursorScale",Scale=1})
+    for _=1,10 do
+        local dot=self:_Frame(self.Layer,{Name="CursorTrail",Size=UDim2.fromOffset(2,2),AnchorPoint=Vector2.new(.5,.5),BackgroundColor3="@Accent",BackgroundTransparency=1,Visible=false,ZIndex=999})
+        self:_Node("UICorner",dot,{CornerRadius=UDim.new(1,0)})
+        self._fxTrail[#self._fxTrail+1]={Gui=dot,Age=1}
+    end
+    self._fxTrailIndex=1;self._fxTrailClock=0
+    self:_FXMakeParticles()
+    self:_Connect(Input.WindowFocused,function()self._fxFocused=true;self:_FXRefresh()end)
+    self:_FXRefresh(true)
+end
+function Window:_FXGlowTick(time)
+    local pulse=self.Effects.GlowPulse and not self.Effects.ReducedMotion and (.8+.2*math.sin(time*1.7))or 1
+    for _,layer in ipairs(self._fxGlowLayers)do layer.Gui.BackgroundTransparency=1-self.Effects.GlowStrength*pulse*layer.Weight end
+end
+function Window:_FXCursorTick(dt)
+    local p=pointer()-self.Layer.AbsolutePosition
+    local size=self.Layer.AbsoluteSize
+    local show=self.Visible and self._fxFocused and self.Effects.Cursor and Input.MouseEnabled
+        and not Input:GetFocusedTextBox()and p.X>=0 and p.Y>=0 and p.X<=size.X and p.Y<=size.Y
+    self.CursorGui.Visible=show==true
+    cursorClaim(self,show)
+    if show then
+        self.CursorGui.Position=UDim2.fromOffset(p.X,p.Y)
+        self._fxTrailClock+=dt
+        if self.Effects.CursorTrail and not self.Effects.ReducedMotion and self._fxTrailClock>.025
+            and self._fxLastPointer and (p-self._fxLastPointer).Magnitude>2 then
+            self._fxTrailClock=0
+            local item=self._fxTrail[self._fxTrailIndex]
+            item.Age=0;item.Gui.Position=UDim2.fromOffset(p.X,p.Y)
+            self._fxTrailIndex=self._fxTrailIndex%#self._fxTrail+1
+        end
+        self._fxLastPointer=p
+    else
+        self._fxLastPointer=nil
+    end
+    for _,item in ipairs(self._fxTrail)do
+        item.Age+=dt
+        item.Gui.Visible=show and self.Effects.CursorTrail and not self.Effects.ReducedMotion and item.Age<.14
+        item.Gui.BackgroundTransparency=.65+.35*math.clamp(item.Age/.14,0,1)
+    end
+end
+function Window:_FXStep(dt)
+    dt=math.clamp(dt,0,.1)
+    self._fxTime+=dt
+    self:_FXGlowTick(self._fxTime)
+    if self.Effects.Particles and not self.Effects.ReducedMotion then
+        local size=self.ParticleLayer.AbsoluteSize
+        for _,item in ipairs(self._fxParticles)do
+            item.Y+=dt*self.Effects.ParticleSpeed*item.Speed/math.max(1,size.Y)
+            if item.Y>1.05 then item.Y=-.1;item.X=self._fxRandom:NextNumber()end
+            item.Gui.Position=UDim2.fromOffset(item.X*size.X+math.sin(self._fxTime*.5+item.Phase)*8,item.Y*size.Y)
+        end
+    end
+    self:_FXCursorTick(dt)
+    for i=#self._fxRipples,1,-1 do
+        local ripple=self._fxRipples[i];ripple.Age+=dt
+        local progress=math.min(1,ripple.Age/.35)
+        ripple.Gui.Size=UDim2.fromOffset(4+progress*34,4+progress*34)
+        ripple.Stroke.Transparency=progress
+        if progress>=1 then ripple.Gui:Destroy();table.remove(self._fxRipples,i)end
+    end
+    self:_FXEnsureLoop()
+end
+function Window:_FXClick(input)
+    if not self.Visible or not self.Effects.ClickRipples or self.Effects.ReducedMotion or not press(input)then return end
+    local position=input.UserInputType==Enum.UserInputType.Touch and Vector2.new(input.Position.X,input.Position.Y)or pointer()
+    if not hit(self.Root,position)and not (self.Popup and hit(self.Popup,position))then return end
+    local ring=self:_Frame(self.Layer,{Name="ClickRipple",Position=UDim2.fromOffset(position.X-self.Layer.AbsolutePosition.X,position.Y-self.Layer.AbsolutePosition.Y),
+        Size=UDim2.fromOffset(4,4),AnchorPoint=Vector2.new(.5,.5),BackgroundTransparency=1,ZIndex=700})
+    self:_Node("UICorner",ring,{CornerRadius=UDim.new(1,0)})
+    local stroke=self:_Border(ring,"Accent")
+    self._fxRipples[#self._fxRipples+1]={Gui=ring,Stroke=stroke,Age=0}
+    if #self._fxRipples>6 then self._fxRipples[1].Gui:Destroy();table.remove(self._fxRipples,1)end
+    self:_FXEnsureLoop()
+end
+function Window:_FXEnsureLoop()
+    local e=self.Effects
+    local animate=self.Visible and self._fxFocused and (e.Cursor or not e.ReducedMotion and (e.Particles or e.Glow and e.GlowPulse)or #self._fxRipples>0)
+    if animate and not self._fxConnection then
+        self._fxConnection=game:GetService("RunService").RenderStepped:Connect(function(dt)if not self.Destroyed then self:_FXStep(dt)end end)
+    elseif not animate and self._fxConnection then self._fxConnection:Disconnect();self._fxConnection=nil end
+end
+function Window:_FXRefresh(opening)
+    if not self.CursorGui then return end
+    local e=self.Effects
+    if self._fxDimTween then self._fxDimTween:Cancel();self._fxDimTween=nil end
+    self.Backdrop.Visible=self.Visible and e.Dim
+    self._fxVignette.Visible=self.Visible and e.Vignette
+    self._fxGlow.Visible=self.Visible and e.Glow
+    self.ParticleLayer.Visible=self.Visible and e.Particles and not e.ReducedMotion
+    local transparency=1-e.DimAmount
+    if opening and self.Visible and e.Dim and not e.ReducedMotion then
+        self.Backdrop.BackgroundTransparency=1
+        self._fxDimTween=game:GetService("TweenService"):Create(self.Backdrop,TweenInfo.new(.18),{BackgroundTransparency=transparency})
+        self._fxDimTween:Play()
+    else self.Backdrop.BackgroundTransparency=transparency end
+    self._fxArrow.Visible=e.CursorStyle=="Arrow";self._fxCross.Visible=e.CursorStyle=="Cross"
+    self.CursorGui.AnchorPoint=e.CursorStyle=="Cross"and Vector2.new(.5,.5)or Vector2.zero
+    self.CursorGui.CursorScale.Scale=e.CursorSize/16
+    self:_FXGlowTick(self._fxTime)
+    self:_FXCursorTick(0)
+    self:_FXEnsureLoop()
+    if not self.Visible then
+        for _,ripple in ipairs(self._fxRipples)do ripple.Gui:Destroy()end
+        table.clear(self._fxRipples)
+        for _,item in ipairs(self._fxTrail)do item.Gui.Visible=false;item.Age=1 end
+    end
+end
+function Window:SetEffects(values)
+    assert(not self.Destroyed,"Window destroyed")
+    local normalized=normalizedEffects(values,self.Effects)
+    local rebuild=normalized.ParticleCount~=self.Effects.ParticleCount
+    self.Effects=normalized
+    if rebuild then self:_FXMakeParticles()end
+    self:_FXRefresh()
+    return self
+end
+function Window:GetEffects()return copy(self.Effects)end
+function Window:_FXDestroy()
+    if self._fxConnection then self._fxConnection:Disconnect();self._fxConnection=nil end
+    if self._fxDimTween then self._fxDimTween:Cancel();self._fxDimTween=nil end
+    cursorClaim(self,false)
+end
+
 function Library:CreateWindow(options)
     options = options or {}
     local parent = options.Parent or Players.LocalPlayer:WaitForChild("PlayerGui")
@@ -226,10 +445,12 @@ function Library:CreateWindow(options)
         ToggleKey=options.ToggleKey or Enum.KeyCode.Insert,OnUnload=options.OnUnload,
         Shading=options.Shading~=false,Shadows=options.Shadows~=false,Checkmarks=options.Checkmarks==true,
         CompactHeader=options.CompactHeader~=false},Window)
+        CompactHeader=options.CompactHeader~=false,_effectOptions=options.Effects},Window)
     if options.Theme then for k,v in pairs(options.Theme) do assert(Palette[k] and typeof(v)=="Color3","Invalid theme");self.Theme[k]=v end end
     if options.Accent then assert(typeof(options.Accent)=="Color3");self.Theme.Accent=options.Accent end
     self.Screen = self:_Node("ScreenGui",parent,{Name=options.Name or "Nocturne",ResetOnSpawn=false,IgnoreGuiInset=true,DisplayOrder=options.DisplayOrder or 80,ZIndexBehavior=Enum.ZIndexBehavior.Global})
     self.Layer = self:_Frame(self.Screen,{Name="Layer",Size=UDim2.fromScale(1,1),BackgroundTransparency=1})
+    self:_FXBackdrop()
     self.Width,self.Height = options.Width or 760,options.Height or 580
     local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280,720)
     self.Root = self:_Frame(self.Layer,{Name="Window",Size=UDim2.fromOffset(self.Width,self.Height),Position=UDim2.fromOffset(math.max(8,(viewport.X-self.Width)/2),math.max(8,(viewport.Y-self.Height)/2)),BackgroundColor3="@Background",Active=true})
@@ -275,14 +496,19 @@ function Library:CreateWindow(options)
     self.Toasts = self:_Frame(self.Layer,{Position=UDim2.new(1,-302,1,-18),AnchorPoint=Vector2.new(0,1),Size=UDim2.fromOffset(286,0),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1,ZIndex=200})
     self:_List(self.Toasts,8)
     self:_Connect(Input.InputChanged,function(input)
+    self._HandleInputChanged=function(input)
         local drag=self.Drag
         if not drag then return end
+        if not self.Visible or not drag.Surface.Parent then self.Drag=nil;return end
         if input.UserInputType==Enum.UserInputType.MouseMovement and drag.Input.UserInputType==Enum.UserInputType.MouseButton1 then
+            if not Input:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then self.Drag=nil;return end
             local p=pointer();drag.Callback(p,p-drag.Origin,false)
         elseif input==drag.Input and input.UserInputType==Enum.UserInputType.Touch then
             local p=Vector2.new(input.Position.X,input.Position.Y);drag.Callback(p,p-drag.Origin,false)
         end
     end)
+    end
+    self:_Connect(Input.InputChanged,self._HandleInputChanged)
     self._HandleInputEnded=function(input)
         if self.Drag and (input==self.Drag.Input or input.UserInputType==Enum.UserInputType.MouseButton1 and self.Drag.Input.UserInputType==Enum.UserInputType.MouseButton1) then self.Drag=nil end
         local key=inputKey(input)
@@ -292,8 +518,10 @@ function Library:CreateWindow(options)
     self:_Connect(Input.WindowFocusReleased,function()
         self.Drag=nil
         for _,c in ipairs(self._controls)do if c.Type=="Keybind" and c.Value.Mode=="Hold" then c:_Activate(false) end end
+        self._fxFocused=false;self:_FXRefresh()
     end)
     self._HandleInputBegan=function(input,processed)
+        self:_FXClick(input)
         local key=inputKey(input)
         if self.Capture then
             if press(input) then
@@ -330,6 +558,7 @@ function Library:CreateWindow(options)
         self.Toasts.Position=UDim2.new(1,-self.Toasts.Size.X.Offset-16,1,-18)
     end)
     task.defer(function() if not self.Destroyed then self:SetSize(self.Width,self.Height) end end)
+    self:_FXInitialize()
     return self
 end
 
@@ -1143,16 +1372,19 @@ function Window:ExportConfig()
     local values={}
     for flag,c in pairs(self.Options)do if c.Persist then values[flag]=c._Serialize and c:_Serialize() or copy(c.Value)end end
     return Http:JSONEncode({version=1,values=values})
+    return Http:JSONEncode({version=1,values=values,effects=copy(self.Effects)})
 end
 function Window:LoadConfig(json,fireCallbacks)
     local ok,err=pcall(function()
         assert(not self.Destroyed,"Window destroyed")
         local data=type(json)=="string" and Http:JSONDecode(json) or json
         assert(type(data)=="table" and data.version==1 and type(data.values)=="table","Invalid Nocturne configuration")
+        local effects=data.effects and normalizedEffects(data.effects,self.Effects)
         local validated={}
         for _,c in ipairs(self._controls)do local value=data.values[c.Flag];if c.Persist and value~=nil then validated[#validated+1]={Control=c,Value=c._Normalize(value)}end end
         -- Validate every known value before changing any control.
         self.LoadingConfig=true
+        if effects then self:SetEffects(effects)end
         for _,entry in ipairs(validated)do entry.Control:Set(entry.Value,true)end
         if fireCallbacks then for _,entry in ipairs(validated)do entry.Control:_Call()end end
     end)
@@ -1189,4 +1421,3 @@ function Library.ExecutorStorage(directory)
     return {Write=function(name,json)writefile(path(name),json)end,Read=function(name)return readfile(path(name))end}
 end
 return Library
-
