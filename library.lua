@@ -1,4 +1,5 @@
-local Library = {Version = "1.3.1"}
+-- Nocturne 1.4 | Native Roblox UI | Client-side ModuleScript
+-- No HTTP dependencies, hooks, game-specific behavior or external assets.
 local Library = {Version = "1.4.1"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
@@ -33,7 +34,6 @@ local function hit(gui, position)
 end
 -- AbsolutePosition and touch Position use the GUI inset coordinate space.
 -- GetMouseLocation uses screen coordinates, including the Roblox top bar.
-local function pointer() return Input:GetMouseLocation() end
 local function pointer() return Input:GetMouseLocation()-GuiService:GetGuiInset() end
 local function press(input)
     return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
@@ -124,7 +124,6 @@ function Window:_Drag(surface, callback, scope)
     self:_Connect(surface.InputBegan, function(input)
         if not press(input) or self.Capture then return end
         local origin = input.UserInputType == Enum.UserInputType.Touch and Vector2.new(input.Position.X,input.Position.Y) or pointer()
-        self.Drag = {Input=input, Origin=origin, Callback=callback}
         self.Drag = {Input=input, Origin=origin, Callback=callback, Surface=surface}
         callback(origin, Vector2.zero, true)
     end, scope)
@@ -444,7 +443,6 @@ function Library:CreateWindow(options)
         _themeNodes=setmetatable({},{__mode="k"}),_controls={},_nextFlag=0,Storage=options.Storage,
         ToggleKey=options.ToggleKey or Enum.KeyCode.Insert,OnUnload=options.OnUnload,
         Shading=options.Shading~=false,Shadows=options.Shadows~=false,Checkmarks=options.Checkmarks==true,
-        CompactHeader=options.CompactHeader~=false},Window)
         CompactHeader=options.CompactHeader~=false,_effectOptions=options.Effects},Window)
     if options.Theme then for k,v in pairs(options.Theme) do assert(Palette[k] and typeof(v)=="Color3","Invalid theme");self.Theme[k]=v end end
     if options.Accent then assert(typeof(options.Accent)=="Color3");self.Theme.Accent=options.Accent end
@@ -495,7 +493,6 @@ function Library:CreateWindow(options)
     end)
     self.Toasts = self:_Frame(self.Layer,{Position=UDim2.new(1,-302,1,-18),AnchorPoint=Vector2.new(0,1),Size=UDim2.fromOffset(286,0),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1,ZIndex=200})
     self:_List(self.Toasts,8)
-    self:_Connect(Input.InputChanged,function(input)
     self._HandleInputChanged=function(input)
         local drag=self.Drag
         if not drag then return end
@@ -506,7 +503,6 @@ function Library:CreateWindow(options)
         elseif input==drag.Input and input.UserInputType==Enum.UserInputType.Touch then
             local p=Vector2.new(input.Position.X,input.Position.Y);drag.Callback(p,p-drag.Origin,false)
         end
-    end)
     end
     self:_Connect(Input.InputChanged,self._HandleInputChanged)
     self._HandleInputEnded=function(input)
@@ -1371,7 +1367,6 @@ end
 function Window:ExportConfig()
     local values={}
     for flag,c in pairs(self.Options)do if c.Persist then values[flag]=c._Serialize and c:_Serialize() or copy(c.Value)end end
-    return Http:JSONEncode({version=1,values=values})
     return Http:JSONEncode({version=1,values=values,effects=copy(self.Effects)})
 end
 function Window:LoadConfig(json,fireCallbacks)
@@ -1421,3 +1416,4 @@ function Library.ExecutorStorage(directory)
     return {Write=function(name,json)writefile(path(name),json)end,Read=function(name)return readfile(path(name))end}
 end
 return Library
+
