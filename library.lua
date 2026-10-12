@@ -1,6 +1,6 @@
--- Nocturne 1.4 | Native Roblox UI | Client-side ModuleScript
+-- Nocturne 1.5 | Native Roblox UI | Client-side ModuleScript
 -- No HTTP dependencies, hooks, game-specific behavior or external assets.
-local Library = {Version = "1.4.1"}
+local Library = {Version = "1.5.0"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
@@ -210,6 +210,10 @@ function Window:Destroy()
     if self.Destroyed or self._Destroying then return end
     self._Destroying=true
     self.Visible=false
+    if self._keybindLists then
+        local lists={}for list in pairs(self._keybindLists)do lists[#lists+1]=list end
+        for _,list in ipairs(lists)do list:Destroy()end
+    end
     self:_FXDestroy()
     self:_ClosePopup()
     self.Drag = nil
@@ -222,6 +226,100 @@ function Window:Destroy()
     table.clear(self._connections)
     self.Screen:Destroy()
     if self.OnUnload then pcall(self.OnUnload) end
+end
+
+-- Optional keybind HUD, independent from menu visibility, owned by the window.
+function Window:CreateKeybindList(options)
+    assert(not self.Destroyed,"Window destroyed")
+    options=options or {}
+    local w=self
+    local width=math.clamp(options.Width or 222,160,400)
+    local list={Window=w,Entries={},Visible=options.Visible~=false,Destroyed=false,VisibleCount=0,_connections={}}
+    list.Panel=w:_Frame(w.Layer,{Name="KeybindList",Position=options.Position or UDim2.new(0,16,.5,0),
+        AnchorPoint=options.AnchorPoint or Vector2.new(0,.5),Size=UDim2.fromOffset(width,64),
+        BackgroundColor3="@Panel",BackgroundTransparency=.08,ZIndex=220})
+    w:_Border(list.Panel);w:_Shadow(list.Panel)
+    w:_Frame(list.Panel,{Name="Accent",Size=UDim2.new(1,0,0,1),BackgroundColor3="@Accent",ZIndex=221})
+    list.Title=w:_Text(list.Panel,options.Title or "KEYBINDS",{Position=UDim2.fromOffset(12,8),
+        Size=UDim2.new(1,-24,0,18),TextSize=11,TextColor3="@Accent",ZIndex=222})
+    list.MenuLabel=w:_Text(list.Panel,"",{Name="MenuShortcut",Position=UDim2.fromOffset(12,37),
+        Size=UDim2.new(1,-24,0,18),TextSize=10,TextColor3="@Muted",Visible=options.ShowMenu~=false,ZIndex=222})
+    local aliases={MB1="Mouse 1",MB2="Mouse 2",LeftControl="L Ctrl",RightControl="R Ctrl",
+        LeftShift="L Shift",RightShift="R Shift",LeftAlt="L Alt",RightAlt="R Alt",None="Unbound",Unknown="Unbound"}
+    local function friendly(key)return aliases[key]or key end
+    local function resolve(control)
+        if type(control)=="string"then control=w.Options[control]end
+        return control
+    end
+    function list:Add(info)
+        assert(not self.Destroyed,"Keybind list destroyed")
+        assert(type(info)=="table","Entry options required")
+        local bind=resolve(info.Keybind)
+        assert(bind and bind.Type=="Keybind"and bind.Window==w,"Entry requires a keybind from this window")
+        local toggle=resolve(info.Toggle)
+        if toggle then assert(toggle.Type=="Toggle"and toggle.Window==w,"Invalid entry toggle")end
+        if info.IsActive then assert(type(info.IsActive)=="function","IsActive must be a function")end
+        local entry={Keybind=bind,Toggle=toggle,IsActive=info.IsActive,Text=info.Text or bind.Label.Text}
+        entry.Row=w:_Frame(self.Panel,{Size=UDim2.new(1,-24,0,20),Position=UDim2.fromOffset(12,32),BackgroundTransparency=1,ZIndex=221})
+        entry.Label=w:_Text(entry.Row,entry.Text,{Size=UDim2.new(1,-90,1,0),TextSize=11,ZIndex=222})
+        entry.Key=w:_Text(entry.Row,"",{Position=UDim2.new(1,-88,0,0),Size=UDim2.fromOffset(64,20),TextXAlignment=Enum.TextXAlignment.Right,TextSize=10,TextColor3="@Muted",ZIndex=222})
+        entry.Status=w:_Text(entry.Row,"ON",{Position=UDim2.new(1,-22,0,0),Size=UDim2.fromOffset(22,20),TextXAlignment=Enum.TextXAlignment.Right,TextSize=10,TextColor3="@Accent",ZIndex=222})
+        self.Entries[#self.Entries+1]=entry
+        self:Refresh()
+        return entry
+    end
+    function list:Remove(entry)
+        assert(not self.Destroyed,"Keybind list destroyed")
+        local index=table.find(self.Entries,entry)
+        if index then entry.Row:Destroy();table.remove(self.Entries,index);self:Refresh()end
+    end
+    function list:Refresh()
+        if self.Destroyed or w.Destroyed then return end
+        self.Panel.Visible=self.Visible
+        local count=0
+        for _,entry in ipairs(self.Entries)do
+            local active
+            if entry.IsActive then local ok,value=pcall(entry.IsActive);active=ok and value==true
+            elseif entry.Toggle then active=entry.Toggle:Get()==true
+            else active=entry.Keybind.Active==true end
+            active=active and not entry.Keybind.Disabled and not (entry.Keybind.ParentControl and entry.Keybind.ParentControl.Disabled)
+            entry.Row.Visible=active==true
+            if active then
+                entry.Row.Position=UDim2.fromOffset(12,32+count*21)
+                entry.Key.Text="["..friendly(entry.Keybind:Get()).."]"
+                count+=1
+            end
+        end
+        self.VisibleCount=count
+        local menu=resolve(options.MenuKey)
+        local key=menu and menu:Get()or w.ToggleKey.Name
+        self.MenuLabel.Text="["..friendly(key).."] "..(options.MenuText or "Menu")
+        self.MenuLabel.Position=UDim2.fromOffset(12,37+count*21)
+        self.Panel.Size=UDim2.fromOffset(width,(options.ShowMenu~=false and 64 or 40)+count*21)
+    end
+    function list:SetVisible(value)
+        assert(type(value)=="boolean","Visible must be boolean")
+        assert(not self.Destroyed,"Keybind list destroyed")
+        self.Visible=value;self:Refresh();return self
+    end
+    function list:SetTitle(value)assert(not self.Destroyed,"Keybind list destroyed");self.Title.Text=tostring(value);return self end
+    function list:SetPosition(value)assert(typeof(value)=="UDim2","Position must be UDim2");assert(not self.Destroyed,"Keybind list destroyed");self.Panel.Position=value;return self end
+    function list:Destroy()
+        if self.Destroyed then return end
+        self.Destroyed=true
+        for _,connection in ipairs(self._connections)do connection:Disconnect()end
+        table.clear(self._connections)
+        self.Panel:Destroy();table.clear(self.Entries)
+        w._keybindLists[self]=nil
+    end
+    w._keybindLists=w._keybindLists or {};w._keybindLists[list]=true
+    local elapsed=0
+    w:_Connect(game:GetService("RunService").Heartbeat,function(dt)
+        elapsed+=dt
+        if elapsed>=.1 then elapsed=0;if list.Visible then list:Refresh()end end
+    end,list._connections)
+    list:Refresh()
+    return list
 end
 
 -- All atmosphere objects belong to this window; none touches game lighting.
