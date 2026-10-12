@@ -1,6 +1,6 @@
 -- Nocturne 1.6 | Native Roblox UI | Client-side ModuleScript
 -- No HTTP dependencies, hooks, game-specific behavior or external assets.
-local Library = {Version = "1.6.0"}
+local Library = {Version = "1.6.1"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
@@ -1093,7 +1093,8 @@ function Section:AddImagePreview(options)
     local name=w:_Text(canvas,options.Name or "Player",{TextXAlignment=Enum.TextXAlignment.Center,TextStrokeTransparency=0,TextSize=11})
     local readout=w:_Text(canvas,options.Readout or "STATIC PREVIEW",{TextXAlignment=Enum.TextXAlignment.Center,TextStrokeTransparency=0,TextSize=10})
     local c=setmetatable({Window=w,Row=h.Row,Label=h.Label,Image=image,Canvas=canvas,Bounds=box,
-        OutlineStroke=stroke,Type="ImagePreview",ImageSize=options.ImageSize or Vector2.new(725,633),
+        OutlineStroke=stroke,NameLabel=name,DistanceLabel=readout,OutlineFrame=inner,DarkStroke=box:FindFirstChildOfClass("UIStroke"),
+        Type="ImagePreview",ImageSize=options.ImageSize or Vector2.new(725,633),
         Outline=options.Outline~=false,ESPVisible=true},Control)
     local function validate(bounds)
         assert(type(bounds)=="table","Bounds need Left, Top, Width, Height")
@@ -1103,18 +1104,19 @@ function Section:AddImagePreview(options)
     end
     c.NormalizedBounds=validate(options.Bounds or {Left=.27,Top=.15,Width=.42,Height=.75})
     local function layout()
-        local available=image.AbsoluteSize
+        local guiScale=w.Scale or 1
+        local available=image.AbsoluteSize/guiScale
         local pixels=c.ImageSize
         assert(pixels.X>0 and pixels.Y>0,"ImageSize must be positive")
         local scale=math.min(available.X/pixels.X,available.Y/pixels.Y)
         local size=pixels*scale
-        local offset=(available-size)*.5+image.AbsolutePosition-canvas.AbsolutePosition
+        local offset=(available-size)*.5+(image.AbsolutePosition-canvas.AbsolutePosition)/guiScale
         local b=c.NormalizedBounds
         local x,y=offset.X+size.X*b.Left,offset.Y+size.Y*b.Top
         local width,height=size.X*b.Width,size.Y*b.Height
         box.Position=UDim2.fromOffset(x,y);box.Size=UDim2.fromOffset(width,height)
         name.Position=UDim2.fromOffset(0,math.max(1,y-18));name.Size=UDim2.new(1,0,0,16)
-        readout.Position=UDim2.fromOffset(0,math.min(canvas.AbsoluteSize.Y-16,y+height+4));readout.Size=UDim2.new(1,0,0,15)
+        readout.Position=UDim2.fromOffset(0,math.min(canvas.AbsoluteSize.Y/guiScale-16,y+height+4));readout.Size=UDim2.new(1,0,0,15)
     end
     function c:SetBounds(bounds)self.NormalizedBounds=validate(bounds);layout();return self end
     function c:SetImage(asset,size)
