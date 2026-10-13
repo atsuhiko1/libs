@@ -1,6 +1,6 @@
--- Nocturne 1.6 | Native Roblox UI | Client-side ModuleScript
+-- Nocturne 1.7 | Native Roblox UI | Client-side ModuleScript
 -- No HTTP dependencies, hooks, game-specific behavior or external assets.
-local Library = {Version = "1.7.0"}
+local Library = {Version = "1.7.1"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
@@ -254,14 +254,15 @@ function Window:_CreateBranding(parent,options,properties)
     local suffix=tostring(options.Suffix or "")
     local function measure(text)return math.ceil(textService:GetTextSize(text,size,self.Font,Vector2.new(4096,height)).X)end
     local nameWidth,suffixWidth=measure(name),measure(suffix)
-    local logoSize=options.LogoSize or Vector2.new(size,size+2)
+    local logoSize=options.LogoSize or Vector2.new(size-4,size-2)
+    local logoOffset=options.LogoOffset or Vector2.new(0,2)
     local hasLogo=type(options.Logo)=="string"and options.Logo~=""
     local offset=hasLogo and logoSize.X+(options.Gap or 7)or 0
     local width=offset+nameWidth+suffixWidth
     local frame=self:_Frame(parent,{Name="Branding",Position=properties.Position or UDim2.new(),
         Size=UDim2.fromOffset(width,height),BackgroundTransparency=1,ZIndex=z})
     local logo=self:_Node("ImageLabel",frame,{Name="Logo",AnchorPoint=Vector2.new(0,.5),
-        Position=UDim2.new(0,0,.5,0),Size=UDim2.fromOffset(logoSize.X,logoSize.Y),Image=options.Logo or "",
+        Position=UDim2.new(0,logoOffset.X,.5,logoOffset.Y),Size=UDim2.fromOffset(logoSize.X,logoSize.Y),Image=options.Logo or "",
         ImageRectOffset=options.LogoRectOffset or Vector2.zero,ImageRectSize=options.LogoRectSize or Vector2.zero,
         BackgroundTransparency=1,ScaleType=Enum.ScaleType.Fit,Visible=hasLogo,ZIndex=z})
     local label=self:_Text(frame,name,{Name="BrandName",AnchorPoint=Vector2.new(0,.5),Position=UDim2.new(0,offset,.5,0),
@@ -296,7 +297,7 @@ function Window:CreateWatermark(options)
     local mark={Window=w,Visible=options.Visible~=false,Destroyed=false,_connections={},Text=options.Text or ""}
     local height=options.Height or 32
     mark.Panel=w:_Frame(w.Layer,{Name="Watermark",AnchorPoint=options.AnchorPoint or Vector2.new(1,0),
-        Position=options.Position or UDim2.new(1,-16,0,16),Size=UDim2.fromOffset(180,height),
+        Position=options.Position or UDim2.new(1,-16,0,16+GuiService:GetGuiInset().Y),Size=UDim2.fromOffset(180,height),
         BackgroundColor3="@Panel",BackgroundTransparency=.06,ZIndex=230,Visible=mark.Visible})
     w:_Border(mark.Panel);w:_Shadow(mark.Panel);w:_Shade(mark.Panel)
     mark.Accent=w:_Frame(mark.Panel,{Name="Accent",Size=UDim2.new(1,0,0,1),BackgroundColor3="@Accent",ZIndex=231})
@@ -327,7 +328,7 @@ function Window:CreateWatermark(options)
     function mark:SetBranding(branding)
         if self.Branding then self.Branding.Frame:Destroy()end
         local b=copy(branding or {Name=options.Title or w.Title.Text,Color=w.Theme.Accent})
-        b.FontSize=options.FontSize or 14;b.LogoSize=options.LogoSize or Vector2.new(13,16)
+        b.FontSize=options.FontSize or 14;b.LogoSize=options.LogoSize or Vector2.new(11,13)
         self.Branding=w:_CreateBranding(self.Panel,b,{Position=UDim2.fromOffset(12,(height-20)/2),Height=20,ZIndex=232})
         local color=w._themeNodes[self.Accent];if color then color.BackgroundColor3=nil end
         self.Accent.BackgroundColor3=b.Gradient and Color3.new(1,1,1)or b.Color or w.Theme.Accent
@@ -358,6 +359,25 @@ function Window:CreateWatermark(options)
         mark:Refresh()
     end,mark._connections)
     return mark
+end
+function Window:SetFooterVersion(text,options)
+    assert(not self.Destroyed,"Window destroyed")
+    options=options or {}
+    if self.VersionLabel then self.VersionLabel:Destroy();self.VersionSeparator:Destroy();self.VersionLabel=nil end
+    self._versionFooterPosition=self._versionFooterPosition or self.Footer.Position
+    self._versionFooterSize=self._versionFooterSize or self.Footer.Size
+    if text==nil then self.Footer.Position=self._versionFooterPosition;self.Footer.Size=self._versionFooterSize;return self end
+    local size=options.TextSize or 11
+    local width=math.ceil(game:GetService("TextService"):GetTextSize(tostring(text),size,self.Font,Vector2.new(4096,16)).X)
+    self.VersionLabel=self:_Text(self.Root,tostring(text),{Name="Version",Position=UDim2.new(0,18,1,-24),
+        Size=UDim2.fromOffset(width,16),TextSize=size,TextColor3=options.Gradient and Color3.new(1,1,1)or options.Color or self.Theme.Accent,
+        TextTruncate=Enum.TextTruncate.None})
+    if options.Gradient then self:_Node("UIGradient",self.VersionLabel,{Color=options.Gradient})end
+    self.VersionSeparator=self:_Frame(self.Root,{Name="VersionSeparator",Position=UDim2.new(0,18+width+7,1,-19),
+        Size=UDim2.fromOffset(1,7),BackgroundColor3="@Border"})
+    self.Footer.Position=UDim2.new(0,18+width+15,1,-24)
+    self.Footer.Size=UDim2.new(1,-55-width-15,0,16)
+    return self
 end
 
 -- Optional keybind HUD, independent from menu visibility, owned by the window.
@@ -440,7 +460,7 @@ function Window:CreateKeybindList(options)
         if branding then
             local b=copy(branding)
             b.FontSize=options.TitleTextSize or math.min(16,b.FontSize or 16)
-            b.LogoSize=options.LogoSize or Vector2.new(14,17)
+            b.LogoSize=options.LogoSize or Vector2.new(12,14)
             self.Branding=w:_CreateBranding(self.Panel,b,{Position=UDim2.fromOffset(12,7),Height=22,ZIndex=222})
         end
         return self
