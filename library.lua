@@ -1,6 +1,6 @@
 -- Nocturne 1.6 | Native Roblox UI | Client-side ModuleScript
 -- No HTTP dependencies, hooks, game-specific behavior or external assets.
-local Library = {Version = "1.6.1"}
+local Library = {Version = "1.7.0"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
@@ -224,6 +224,10 @@ function Window:Destroy()
         local lists={}for list in pairs(self._keybindLists)do lists[#lists+1]=list end
         for _,list in ipairs(lists)do list:Destroy()end
     end
+    if self._watermarks then
+        local marks={}for mark in pairs(self._watermarks)do marks[#marks+1]=mark end
+        for _,mark in ipairs(marks)do mark:Destroy()end
+    end
     self:_FXDestroy()
     self:_ClosePopup()
     self.Drag = nil
@@ -237,6 +241,123 @@ function Window:Destroy()
     table.clear(self._connections)
     self.Screen:Destroy()
     if self.OnUnload then pcall(self.OnUnload) end
+end
+
+-- Shared branding layout: logo, name and suffix share one vertical center.
+function Window:_CreateBranding(parent,options,properties)
+    options=options or {};properties=properties or {}
+    local size=options.FontSize or 16
+    local height=properties.Height or 22
+    local z=properties.ZIndex or parent.ZIndex
+    local textService=game:GetService("TextService")
+    local name=tostring(options.Name or "")
+    local suffix=tostring(options.Suffix or "")
+    local function measure(text)return math.ceil(textService:GetTextSize(text,size,self.Font,Vector2.new(4096,height)).X)end
+    local nameWidth,suffixWidth=measure(name),measure(suffix)
+    local logoSize=options.LogoSize or Vector2.new(size,size+2)
+    local hasLogo=type(options.Logo)=="string"and options.Logo~=""
+    local offset=hasLogo and logoSize.X+(options.Gap or 7)or 0
+    local width=offset+nameWidth+suffixWidth
+    local frame=self:_Frame(parent,{Name="Branding",Position=properties.Position or UDim2.new(),
+        Size=UDim2.fromOffset(width,height),BackgroundTransparency=1,ZIndex=z})
+    local logo=self:_Node("ImageLabel",frame,{Name="Logo",AnchorPoint=Vector2.new(0,.5),
+        Position=UDim2.new(0,0,.5,0),Size=UDim2.fromOffset(logoSize.X,logoSize.Y),Image=options.Logo or "",
+        ImageRectOffset=options.LogoRectOffset or Vector2.zero,ImageRectSize=options.LogoRectSize or Vector2.zero,
+        BackgroundTransparency=1,ScaleType=Enum.ScaleType.Fit,Visible=hasLogo,ZIndex=z})
+    local label=self:_Text(frame,name,{Name="BrandName",AnchorPoint=Vector2.new(0,.5),Position=UDim2.new(0,offset,.5,0),
+        Size=UDim2.fromOffset(nameWidth,height),TextSize=size,TextColor3=options.Color or self.Theme.Accent,
+        TextYAlignment=Enum.TextYAlignment.Center,TextTruncate=Enum.TextTruncate.None,ZIndex=z})
+    if options.Gradient then
+        label.TextColor3=Color3.new(1,1,1)
+        self:_Node("UIGradient",label,{Color=options.Gradient})
+    end
+    local tail=self:_Text(frame,suffix,{Name="BrandSuffix",AnchorPoint=Vector2.new(0,.5),
+        Position=UDim2.new(0,offset+nameWidth,.5,0),Size=UDim2.fromOffset(suffixWidth,height),
+        TextSize=size,TextColor3=options.SuffixColor or Color3.new(1,1,1),TextYAlignment=Enum.TextYAlignment.Center,
+        TextTruncate=Enum.TextTruncate.None,ZIndex=z})
+    return {Frame=frame,Logo=logo,Name=label,Suffix=tail,Width=width,Options=copy(options)}
+end
+function Window:SetBranding(options)
+    assert(not self.Destroyed,"Window destroyed")
+    if self.BrandHeader then self.BrandHeader.Frame:Destroy();self.BrandHeader=nil end
+    self.Branding=options and copy(options)or nil
+    self.Title.Visible=options==nil
+    if options then
+        self.BrandHeader=self:_CreateBranding(self.TitleBar,options,{Position=UDim2.fromOffset(18,10),Height=20,ZIndex=self.Title.ZIndex})
+    end
+    for list in pairs(self._keybindLists or {})do list:SetBranding(self.Branding)end
+    for mark in pairs(self._watermarks or {})do mark:SetBranding(self.Branding)end
+    return self
+end
+function Window:CreateWatermark(options)
+    assert(not self.Destroyed,"Window destroyed")
+    options=options or {}
+    local w=self
+    local mark={Window=w,Visible=options.Visible~=false,Destroyed=false,_connections={},Text=options.Text or ""}
+    local height=options.Height or 32
+    mark.Panel=w:_Frame(w.Layer,{Name="Watermark",AnchorPoint=options.AnchorPoint or Vector2.new(1,0),
+        Position=options.Position or UDim2.new(1,-16,0,16),Size=UDim2.fromOffset(180,height),
+        BackgroundColor3="@Panel",BackgroundTransparency=.06,ZIndex=230,Visible=mark.Visible})
+    w:_Border(mark.Panel);w:_Shadow(mark.Panel);w:_Shade(mark.Panel)
+    mark.Accent=w:_Frame(mark.Panel,{Name="Accent",Size=UDim2.new(1,0,0,1),BackgroundColor3="@Accent",ZIndex=231})
+    mark.Divider=w:_Frame(mark.Panel,{Name="Divider",AnchorPoint=Vector2.new(0,.5),Position=UDim2.new(0,0,.5,0),
+        Size=UDim2.fromOffset(1,12),BackgroundColor3="@Border",ZIndex=232})
+    mark.Details=w:_Text(mark.Panel,"",{Name="Details",AnchorPoint=Vector2.new(0,.5),Position=UDim2.new(0,0,.5,0),
+        Size=UDim2.fromOffset(100,height),TextSize=options.TextSize or 11,TextColor3="@Text",ZIndex=232,
+        TextYAlignment=Enum.TextYAlignment.Center,TextTruncate=Enum.TextTruncate.None})
+    function mark:Refresh()
+        if self.Destroyed then return self end
+        local parts={}
+        if self.Text~=""then parts[#parts+1]=self.Text end
+        if options.ShowFPS~=false then parts[#parts+1]=tostring(self.FPS or 0).." fps"end
+        if options.ShowPing~=false then parts[#parts+1]=(self.Ping and tostring(self.Ping)or "--").." ms"end
+        local text=table.concat(parts,"  ·  ")
+        self.Details.Text=text
+        local width=math.ceil(game:GetService("TextService"):GetTextSize(text,self.Details.TextSize,w.Font,Vector2.new(4096,height)).X)
+        local brandWidth=self.Branding and self.Branding.Width or 0
+        local hasDetails=text~=""
+        self.Divider.Visible=hasDetails and brandWidth>0
+        self.Divider.Position=UDim2.new(0,12+brandWidth+9,.5,0)
+        local x=12+brandWidth+(hasDetails and brandWidth>0 and 19 or 0)
+        self.Details.Position=UDim2.new(0,x,.5,0);self.Details.Size=UDim2.fromOffset(width,height)
+        self.Panel.Size=UDim2.fromOffset(math.max(40,x+width+12),height)
+        self.Panel.Visible=self.Visible
+        return self
+    end
+    function mark:SetBranding(branding)
+        if self.Branding then self.Branding.Frame:Destroy()end
+        local b=copy(branding or {Name=options.Title or w.Title.Text,Color=w.Theme.Accent})
+        b.FontSize=options.FontSize or 14;b.LogoSize=options.LogoSize or Vector2.new(13,16)
+        self.Branding=w:_CreateBranding(self.Panel,b,{Position=UDim2.fromOffset(12,(height-20)/2),Height=20,ZIndex=232})
+        local color=w._themeNodes[self.Accent];if color then color.BackgroundColor3=nil end
+        self.Accent.BackgroundColor3=b.Gradient and Color3.new(1,1,1)or b.Color or w.Theme.Accent
+        local old=self.Accent:FindFirstChildOfClass("UIGradient");if old then old:Destroy()end
+        if b.Gradient then w:_Node("UIGradient",self.Accent,{Color=b.Gradient})end
+        return self:Refresh()
+    end
+    function mark:SetText(value)assert(not self.Destroyed,"Watermark destroyed");self.Text=tostring(value);return self:Refresh()end
+    function mark:SetVisible(value)assert(type(value)=="boolean","Visible must be boolean");assert(not self.Destroyed,"Watermark destroyed");self.Visible=value;return self:Refresh()end
+    function mark:SetPosition(value)assert(typeof(value)=="UDim2","Position must be UDim2");assert(not self.Destroyed,"Watermark destroyed");self.Panel.Position=value;return self end
+    function mark:Destroy()
+        if self.Destroyed then return end
+        self.Destroyed=true
+        for _,connection in ipairs(self._connections)do connection:Disconnect()end
+        table.clear(self._connections);self.Panel:Destroy();w._watermarks[self]=nil
+    end
+    w._watermarks=w._watermarks or {};w._watermarks[mark]=true
+    mark:SetBranding(options.Branding or w.Branding)
+    local elapsed,frames=0,0
+    w:_Connect(game:GetService("RunService").Heartbeat,function(dt)
+        elapsed+=dt;frames+=1
+        if elapsed<1 then return end
+        mark.FPS=math.floor(frames/elapsed+.5);elapsed,frames=0,0
+        if options.ShowPing~=false then
+            local ok,ping=pcall(function()return game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()end)
+            mark.Ping=ok and finite(ping)and math.floor(ping+.5)or nil
+        end
+        mark:Refresh()
+    end,mark._connections)
+    return mark
 end
 
 -- Optional keybind HUD, independent from menu visibility, owned by the window.
@@ -313,6 +434,17 @@ function Window:CreateKeybindList(options)
         assert(not self.Destroyed,"Keybind list destroyed")
         self.Visible=value;self:Refresh();return self
     end
+    function list:SetBranding(branding)
+        if self.Branding then self.Branding.Frame:Destroy();self.Branding=nil end
+        self.Title.Visible=branding==nil
+        if branding then
+            local b=copy(branding)
+            b.FontSize=options.TitleTextSize or math.min(16,b.FontSize or 16)
+            b.LogoSize=options.LogoSize or Vector2.new(14,17)
+            self.Branding=w:_CreateBranding(self.Panel,b,{Position=UDim2.fromOffset(12,7),Height=22,ZIndex=222})
+        end
+        return self
+    end
     function list:SetTitle(value)assert(not self.Destroyed,"Keybind list destroyed");self.Title.Text=tostring(value);return self end
     function list:SetPosition(value)assert(typeof(value)=="UDim2","Position must be UDim2");assert(not self.Destroyed,"Keybind list destroyed");self.Panel.Position=value;return self end
     function list:Destroy()
@@ -329,6 +461,7 @@ function Window:CreateKeybindList(options)
         elapsed+=dt
         if elapsed>=.1 then elapsed=0;if list.Visible then list:Refresh()end end
     end,list._connections)
+    list:SetBranding(options.Branding or w.Branding)
     list:Refresh()
     return list
 end
@@ -584,7 +717,8 @@ function Library:CreateWindow(options)
     self:_Frame(self.Root,{Position=UDim2.fromOffset(8,8),Size=UDim2.new(1,-16,0,1),BackgroundColor3="@Accent"})
     local compact=self.CompactHeader
     local titlebar = self:_Frame(self.Root,{Size=UDim2.new(1,0,0,compact and 29 or 52),Position=UDim2.fromOffset(0,2),BackgroundTransparency=1,Active=true})
-    self:_Text(titlebar,options.Title or "NOCTURNE",{Position=UDim2.fromOffset(18,compact and 8 or 9),Size=UDim2.new(1,-125,0,18),TextSize=compact and 10 or 16,TextColor3=compact and "@Muted" or "@Text"})
+    self.TitleBar=titlebar
+    self.Title=self:_Text(titlebar,options.Title or "NOCTURNE",{Position=UDim2.fromOffset(18,compact and 8 or 9),Size=UDim2.new(1,-125,0,18),TextSize=compact and 10 or 16,TextColor3=compact and "@Muted" or "@Text"})
     self:_Text(titlebar,options.Subtitle or "INTERFACE LIBRARY / 1.2",{Position=UDim2.fromOffset(18,29),Size=UDim2.new(1,-125,0,14),TextSize=10,TextColor3="@Muted",Visible=not compact})
     local hide = self:_Text(titlebar,"−",{Position=UDim2.new(1,-65,0,compact and 8 or 12),Size=UDim2.fromOffset(20,compact and 18 or 26),TextXAlignment=Enum.TextXAlignment.Center,BackgroundTransparency=0,BackgroundColor3="@Raised"},"TextButton")
     local close = self:_Text(titlebar,"×",{Position=UDim2.new(1,-40,0,compact and 8 or 12),Size=UDim2.fromOffset(20,compact and 18 or 26),TextXAlignment=Enum.TextXAlignment.Center,BackgroundTransparency=0,BackgroundColor3="@Raised"},"TextButton")
@@ -681,6 +815,7 @@ function Library:CreateWindow(options)
     end)
     task.defer(function() if not self.Destroyed then self:SetSize(self.Width,self.Height) end end)
     self:_FXInitialize()
+    if options.Branding then self:SetBranding(options.Branding)end
     if options.AllowMultiple~=true then windowRegistry[singletonKey]=self end
     return self
 end
@@ -1550,4 +1685,3 @@ function Library.ExecutorStorage(directory)
     return {Write=function(name,json)writefile(path(name),json)end,Read=function(name)return readfile(path(name))end}
 end
 return Library
-
