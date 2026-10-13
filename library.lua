@@ -1,6 +1,6 @@
 -- Nocturne 1.7 | Native Roblox UI | Client-side ModuleScript
 -- No HTTP dependencies, hooks, game-specific behavior or external assets.
-local Library = {Version = "1.7.1"}
+local Library = {Version = "1.7.2"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
@@ -243,7 +243,7 @@ function Window:Destroy()
     if self.OnUnload then pcall(self.OnUnload) end
 end
 
--- Shared branding layout: logo, name and suffix share one vertical center.
+-- Shared branding layout, including atlas coordinates after texture resizing.
 function Window:_CreateBranding(parent,options,properties)
     options=options or {};properties=properties or {}
     local size=options.FontSize or 16
@@ -265,6 +265,26 @@ function Window:_CreateBranding(parent,options,properties)
         Position=UDim2.new(0,logoOffset.X,.5,logoOffset.Y),Size=UDim2.fromOffset(logoSize.X,logoSize.Y),Image=options.Logo or "",
         ImageRectOffset=options.LogoRectOffset or Vector2.zero,ImageRectSize=options.LogoRectSize or Vector2.zero,
         BackgroundTransparency=1,ScaleType=Enum.ScaleType.Fit,Visible=hasLogo,ZIndex=z})
+    if options.LogoSourceSize and options.LogoRectSize then
+        local function updateRect()
+            local texture=logo.ContentImageSize
+            local original=options.LogoSourceSize
+            if texture.X<=0 or texture.Y<=0 or original.X<=0 or original.Y<=0 then return false end
+            local function scaled(v)return Vector2.new(math.floor(v.X*texture.X/original.X+.5),math.floor(v.Y*texture.Y/original.Y+.5))end
+            logo.ImageRectOffset=scaled(options.LogoRectOffset or Vector2.zero)
+            logo.ImageRectSize=scaled(options.LogoRectSize)
+            return true
+        end
+        self:_Connect(logo:GetPropertyChangedSignal("ContentImageSize"),updateRect)
+        if not updateRect()then
+            -- ContentImageSize can update without firing its property signal.
+            local elapsed,connection=0,nil
+            connection=self:_Connect(game:GetService("RunService").Heartbeat,function(dt)
+                elapsed+=dt
+                if not logo.Parent or updateRect()or elapsed>=10 then connection:Disconnect()end
+            end)
+        end
+    end
     local label=self:_Text(frame,name,{Name="BrandName",AnchorPoint=Vector2.new(0,.5),Position=UDim2.new(0,offset,.5,0),
         Size=UDim2.fromOffset(nameWidth,height),TextSize=size,TextColor3=options.Color or self.Theme.Accent,
         TextYAlignment=Enum.TextYAlignment.Center,TextTruncate=Enum.TextTruncate.None,ZIndex=z})
@@ -367,15 +387,17 @@ function Window:SetFooterVersion(text,options)
     self._versionFooterPosition=self._versionFooterPosition or self.Footer.Position
     self._versionFooterSize=self._versionFooterSize or self.Footer.Size
     if text==nil then self.Footer.Position=self._versionFooterPosition;self.Footer.Size=self._versionFooterSize;return self end
-    local size=options.TextSize or 11
+    local size=options.TextSize or 13
     local width=math.ceil(game:GetService("TextService"):GetTextSize(tostring(text),size,self.Font,Vector2.new(4096,16)).X)
-    self.VersionLabel=self:_Text(self.Root,tostring(text),{Name="Version",Position=UDim2.new(0,18,1,-24),
-        Size=UDim2.fromOffset(width,16),TextSize=size,TextColor3=options.Gradient and Color3.new(1,1,1)or options.Color or self.Theme.Accent,
+    local right=options.Side~="Left"
+    self.VersionLabel=self:_Text(self.Root,tostring(text),{Name="Version",AnchorPoint=right and Vector2.new(1,0)or Vector2.zero,
+        Position=right and UDim2.new(1,-18,1,-26)or UDim2.new(0,18,1,-26),
+        Size=UDim2.fromOffset(width,20),TextSize=size,TextColor3=options.Gradient and Color3.new(1,1,1)or options.Color or self.Theme.Accent,
         TextTruncate=Enum.TextTruncate.None})
     if options.Gradient then self:_Node("UIGradient",self.VersionLabel,{Color=options.Gradient})end
-    self.VersionSeparator=self:_Frame(self.Root,{Name="VersionSeparator",Position=UDim2.new(0,18+width+7,1,-19),
-        Size=UDim2.fromOffset(1,7),BackgroundColor3="@Border"})
-    self.Footer.Position=UDim2.new(0,18+width+15,1,-24)
+    self.VersionSeparator=self:_Frame(self.Root,{Name="VersionSeparator",Position=right and UDim2.new(1,-18-width-8,1,-20)or UDim2.new(0,18+width+7,1,-20),
+        Size=UDim2.fromOffset(1,8),BackgroundColor3="@Border"})
+    self.Footer.Position=right and self._versionFooterPosition or UDim2.new(0,18+width+15,1,-24)
     self.Footer.Size=UDim2.new(1,-55-width-15,0,16)
     return self
 end
