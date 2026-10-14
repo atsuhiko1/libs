@@ -258,7 +258,8 @@ function Window:_CreateBranding(parent,options,properties)
     local logoOffset=options.LogoOffset or Vector2.new(0,2)
     local hasLogo=type(options.Logo)=="string"and options.Logo~=""
     local offset=hasLogo and logoSize.X+(options.Gap or 7)or 0
-    local width=offset+nameWidth+suffixWidth
+    local suffixGap=(suffix~="" and 2 or 0)
+    local width=offset+nameWidth+suffixGap+suffixWidth
     local frame=self:_Frame(parent,{Name="Branding",Position=properties.Position or UDim2.new(),
         Size=UDim2.fromOffset(width,height),BackgroundTransparency=1,ZIndex=z})
     local logo=self:_Node("ImageLabel",frame,{Name="Logo",AnchorPoint=Vector2.new(0,.5),
@@ -293,7 +294,7 @@ function Window:_CreateBranding(parent,options,properties)
         self:_Node("UIGradient",label,{Color=options.Gradient})
     end
     local tail=self:_Text(frame,suffix,{Name="BrandSuffix",AnchorPoint=Vector2.new(0,.5),
-        Position=UDim2.new(0,offset+nameWidth,.5,0),Size=UDim2.fromOffset(suffixWidth,height),
+        Position=UDim2.new(0,offset+nameWidth+suffixGap,.5,0),Size=UDim2.fromOffset(suffixWidth,height),
         TextSize=size,TextColor3=options.SuffixColor or Color3.new(1,1,1),TextYAlignment=Enum.TextYAlignment.Center,
         TextTruncate=Enum.TextTruncate.None,ZIndex=z})
     return {Frame=frame,Logo=logo,Name=label,Suffix=tail,Width=width,Options=copy(options)}
@@ -391,7 +392,7 @@ function Window:SetFooterVersion(text,options)
     local width=math.ceil(game:GetService("TextService"):GetTextSize(tostring(text),size,self.Font,Vector2.new(4096,16)).X)
     local right=options.Side~="Left"
     self.VersionLabel=self:_Text(self.Root,tostring(text),{Name="Version",AnchorPoint=right and Vector2.new(1,0)or Vector2.zero,
-        Position=right and UDim2.new(1,-18,1,-26)or UDim2.new(0,18,1,-26),
+        Position=right and UDim2.new(1,-18,1,-25)or UDim2.new(0,18,1,-25),
         Size=UDim2.fromOffset(width,20),TextSize=size,TextColor3=options.Gradient and Color3.new(1,1,1)or options.Color or self.Theme.Accent,
         TextTruncate=Enum.TextTruncate.None})
     if options.Gradient then self:_Node("UIGradient",self.VersionLabel,{Color=options.Gradient})end
