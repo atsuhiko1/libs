@@ -1,6 +1,6 @@
 -- Nocturne 1.7 | Native Roblox UI | Client-side ModuleScript
 -- No HTTP dependencies, hooks, game-specific behavior or external assets.
-local Library = {Version = "1.7.2"}
+local Library = {Version = "1.7.3"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
@@ -1318,6 +1318,113 @@ function Section:AddImagePreview(options)
     task.defer(function()if not w.Destroyed then layout()end end)
     table.insert(self.Controls,c)
     return c
+end
+
+function Control:SetPreviewModel(model,options)
+    assert(self.Type=="ImagePreview","SetPreviewModel requires an image preview")
+    assert(typeof(model)=="Instance"and model:IsA("Model"),"Preview needs a Model")
+    options=options or {}
+    local cloned=model:Clone()
+    assert(cloned,"Preview model must be Archivable")
+    if self.ModelViewport then self.ModelViewport:Destroy()end
+    local w=self.Window
+    local view=w:_Node("ViewportFrame",self.Canvas,{Name="ModelPreview",Position=self.Image.Position,Size=self.Image.Size,
+        BackgroundTransparency=1,BorderSizePixel=0,Ambient=Color3.fromRGB(160,160,170),
+        LightColor=Color3.new(1,1,1),LightDirection=Vector3.new(-1,-1,-1),Active=true,ZIndex=self.Image.ZIndex})
+    local world=w:_Node("WorldModel",view,{})
+    local camera=w:_Node("Camera",view,{FieldOfView=options.FieldOfView or 35})
+    view.CurrentCamera=camera
+    for _,script in ipairs(cloned:QueryDescendants("LuaSourceContainer"))do script:Destroy()end
+    local originals={}
+    for _,part in ipairs(cloned:QueryDescendants("BasePart"))do
+        part.Anchored=true;part.CanCollide=false;part.CanTouch=false;part.CanQuery=true
+        originals[part]={Color=part.Color,Material=part.Material}
+    end
+    cloned.Parent=world
+    self.Image.Visible=false
+    self.ModelViewport,self.PreviewModel,self.ModelCamera=view,cloned,camera
+    self.PreviewParts={}
+    for part in pairs(originals)do self.PreviewParts[part.Name]=part end
+    local selected,selectionColor,hover={},w.Theme.Accent,nil
+    local function tint()
+        for part,original in pairs(originals)do
+            part.Color=selected[part.Name]and original.Color:Lerp(selectionColor,.75)
+                or hover==part.Name and original.Color:Lerp(selectionColor,.3)or original.Color
+            part.Material=original.Material
+        end
+    end
+    function self:SetPreviewSelection(parts,color)
+        assert(type(parts)=="table","Selection must be an array of part names")
+        if color then assert(typeof(color)=="Color3","Selection color must be Color3");selectionColor=color end
+        selected={}
+        for _,name in ipairs(parts)do selected[name]=true end
+        tint()
+        return self
+    end
+    local rayParams=RaycastParams.new()
+    rayParams.FilterType=Enum.RaycastFilterType.Include
+    rayParams.FilterDescendantsInstances={cloned}
+    function self:PickPreviewPart(position)
+        assert(typeof(position)=="Vector2","Position must use GUI screen coordinates")
+        local size=view.AbsoluteSize
+        if size.X<=0 or size.Y<=0 then return nil end
+        local point=position-view.AbsolutePosition
+        if point.X<0 or point.Y<0 or point.X>size.X or point.Y>size.Y then return nil end
+        local tangent=math.tan(math.rad(camera.FieldOfView*.5))
+        local direction=Vector3.new((point.X/size.X*2-1)*size.X/size.Y*tangent,
+            -(point.Y/size.Y*2-1)*tangent,-1)
+        local ray=camera.CFrame:VectorToWorldSpace(direction).Unit
+        local hit=world:Raycast(camera.CFrame.Position,ray*1000,rayParams)
+        return hit and hit.Instance or nil
+    end
+    local function layout()
+        if w.Destroyed or not cloned.Parent then return end
+        view.Position=self.Image.Position;view.Size=self.Image.Size
+        local scale=w.Scale or 1
+        local pixels=view.AbsoluteSize/scale
+        if pixels.X<=0 or pixels.Y<=0 then return end
+        local cf,size=cloned:GetBoundingBox()
+        local half=math.max(size.Y*.5,size.X*.5/math.max(.1,pixels.X/pixels.Y))
+        local distance=half/math.tan(math.rad(camera.FieldOfView*.5))*1.3
+        local yaw,pitch=options.Yaw or math.pi+.35,options.Pitch or .1
+        local offset=Vector3.new(math.sin(yaw)*math.cos(pitch),math.sin(pitch),math.cos(yaw)*math.cos(pitch))*distance
+        camera.CFrame=CFrame.lookAt(cf.Position+offset,cf.Position)
+        local focal=pixels.Y/(2*math.tan(math.rad(camera.FieldOfView*.5)))
+        local x0,y0,x1,y1=math.huge,math.huge,-math.huge,-math.huge
+        for _,x in ipairs({-1,1})do for _,y in ipairs({-1,1})do for _,z in ipairs({-1,1})do
+            local p=camera.CFrame:PointToObjectSpace(cf:PointToWorldSpace(Vector3.new(size.X*x*.5,size.Y*y*.5,size.Z*z*.5)))
+            if p.Z<-.001 then
+                local px=pixels.X*.5+p.X/-p.Z*focal
+                local py=pixels.Y*.5-p.Y/-p.Z*focal
+                x0,y0,x1,y1=math.min(x0,px),math.min(y0,py),math.max(x1,px),math.max(y1,py)
+            end
+        end end end
+        local origin=(view.AbsolutePosition-self.Canvas.AbsolutePosition)/scale
+        self.Bounds.Position=UDim2.fromOffset(origin.X+x0,origin.Y+y0)
+        self.Bounds.Size=UDim2.fromOffset(x1-x0,y1-y0)
+        self.NameLabel.Position=UDim2.fromOffset(0,math.max(1,origin.Y+y0-18))
+        self.NameLabel.Size=UDim2.new(1,0,0,16)
+        self.DistanceLabel.Position=UDim2.fromOffset(0,math.min(self.Canvas.AbsoluteSize.Y/scale-16,origin.Y+y1+4))
+        self.DistanceLabel.Size=UDim2.new(1,0,0,15)
+    end
+    self.RefreshPreviewModel=layout
+    local function mousePosition(input)
+        return Vector2.new(input.Position.X,input.Position.Y)
+    end
+    w:_Connect(view.InputBegan,function(input)
+        if input.UserInputType~=Enum.UserInputType.MouseButton1 then return end
+        local part=self:PickPreviewPart(mousePosition(input))
+        if part and options.OnPartClicked then options.OnPartClicked(part.Name,part)end
+    end)
+    w:_Connect(view.InputChanged,function(input)
+        if input.UserInputType~=Enum.UserInputType.MouseMovement then return end
+        local part=self:PickPreviewPart(mousePosition(input))
+        hover=part and part.Name or nil;tint()
+    end)
+    w:_Connect(view.MouseLeave,function()hover=nil;tint()end)
+    w:_Connect(view:GetPropertyChangedSignal("AbsoluteSize"),layout)
+    task.defer(layout)
+    return self
 end
 
 function Section:AddViewport(options)
