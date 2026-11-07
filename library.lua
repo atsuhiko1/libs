@@ -1,6 +1,6 @@
 -- Nocturne 1.7 | Native Roblox UI | Client-side ModuleScript
 -- No HTTP dependencies, hooks, game-specific behavior or external assets.
-local Library = {Version = "1.7.3"}
+local Library = {Version = "1.7.4"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
@@ -478,6 +478,7 @@ function Window:CreateKeybindList(options)
         self.Visible=value;self:Refresh();return self
     end
     function list:SetBranding(branding)
+        if options.ShowBranding==false then branding=nil end
         if self.Branding then self.Branding.Frame:Destroy();self.Branding=nil end
         self.Title.Visible=branding==nil
         if branding then
@@ -1193,6 +1194,59 @@ function Section:AddDropdown(options)
     end)
     return c
 end
+-- A visible, scrollable list of strings; selection and persistence belong to the caller.
+function Section:AddListBox(options)
+    options=options or {}
+    local w=self.Window
+    local height=math.clamp(tonumber(options.Height) or 150,60,350)
+    local frame=w:_Node("ScrollingFrame",self.Frame,{Name="ListBox",Size=UDim2.new(1,0,0,height),
+        LayoutOrder=options.LayoutOrder or #self.Controls+1,BackgroundColor3="@Background",BorderSizePixel=0,
+        ScrollBarThickness=4,ScrollBarImageColor3="@Accent",ScrollingDirection=Enum.ScrollingDirection.Y,
+        CanvasSize=UDim2.fromOffset(0,0),ClipsDescendants=true})
+    w:_Border(frame)
+    local list={Frame=frame,Items={},Buttons={}}
+    local function redraw()
+        for i,button in ipairs(list.Buttons)do
+            local item=list.Items[i]
+            button.Visible=item~=nil
+            if item then
+                button.Text="  "..item
+                w:_Paint(button,"BackgroundColor3",item==list.Selected and "Hover" or "Raised")
+                w:_Paint(button,"TextColor3",item==list.Selected and "Accent" or "Text")
+            end
+        end
+    end
+    function list:Get()return self.Selected end
+    function list:Set(item)
+        if item~=nil and not table.find(self.Items,item)then return false end
+        self.Selected=item
+        redraw()
+        if item and options.OnSelect then options.OnSelect(item)end
+        return true
+    end
+    function list:SetItems(items)
+        local nextItems,seen={},{}
+        for _,item in ipairs(items)do
+            if type(item)=="string" and not seen[item] then
+                seen[item]=true
+                nextItems[#nextItems+1]=item
+            end
+        end
+        self.Items=nextItems
+        if not seen[self.Selected]then self.Selected=nil end
+        for i=#self.Buttons+1,#nextItems do
+            local button=w:_Text(frame,"",{Name="Item",Position=UDim2.fromOffset(2,2+(i-1)*25),
+                Size=UDim2.new(1,-8,0,23),BackgroundTransparency=0,TextSize=12},"TextButton")
+            self.Buttons[i]=button
+            w:_Connect(button.Activated,function()if self.Items[i]then self:Set(self.Items[i])end end)
+        end
+        frame.CanvasSize=UDim2.fromOffset(0,#nextItems*25+4)
+        redraw()
+        return self
+    end
+    return list:SetItems(options.Items or {})
+end
+
 function Section:AddTextbox(options)
     options=options or {}
     local w=self.Window
