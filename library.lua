@@ -1,6 +1,6 @@
 -- Nocturne 1.7 | Native Roblox UI | Client-side ModuleScript
 -- No HTTP dependencies, hooks, game-specific behavior or external assets.
-local Library = {Version = "1.7.4"}
+local Library = {Version = "1.7.5"}
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
@@ -1205,14 +1205,20 @@ function Section:AddListBox(options)
         CanvasSize=UDim2.fromOffset(0,0),ClipsDescendants=true})
     w:_Border(frame)
     local list={Frame=frame,Items={},Buttons={}}
+    local empty=w:_Text(frame,options.EmptyText or "No items",{Name="Empty",Size=UDim2.new(1,-8,0,height),
+        TextColor3="@Muted",TextXAlignment=Enum.TextXAlignment.Center})
+    local accents={}
     local function redraw()
+        empty.Visible=#list.Items==0
         for i,button in ipairs(list.Buttons)do
             local item=list.Items[i]
             button.Visible=item~=nil
             if item then
+                local selected=item==list.Selected
                 button.Text="  "..item
-                w:_Paint(button,"BackgroundColor3",item==list.Selected and "Hover" or "Raised")
-                w:_Paint(button,"TextColor3",item==list.Selected and "Accent" or "Text")
+                accents[i].Visible=selected
+                w:_Paint(button,"BackgroundColor3",(selected or list.Hovered==i) and "Hover" or "Raised")
+                w:_Paint(button,"TextColor3",selected and "Accent" or "Text")
             end
         end
     end
@@ -1238,13 +1244,45 @@ function Section:AddListBox(options)
             local button=w:_Text(frame,"",{Name="Item",Position=UDim2.fromOffset(2,2+(i-1)*25),
                 Size=UDim2.new(1,-8,0,23),BackgroundTransparency=0,TextSize=12},"TextButton")
             self.Buttons[i]=button
+            accents[i]=w:_Frame(button,{Name="Selected",Size=UDim2.new(0,2,1,0),BackgroundColor3="@Accent",Visible=false})
             w:_Connect(button.Activated,function()if self.Items[i]then self:Set(self.Items[i])end end)
+            w:_Connect(button.MouseEnter,function()self.Hovered=i;redraw()end)
+            w:_Connect(button.MouseLeave,function()if self.Hovered==i then self.Hovered=nil;redraw()end end)
         end
         frame.CanvasSize=UDim2.fromOffset(0,#nextItems*25+4)
         redraw()
         return self
     end
     return list:SetItems(options.Items or {})
+end
+
+-- Keep related actions on one row without changing the surrounding section order.
+function Section:AddButtonRow(actions)
+    assert(type(actions)=="table" and #actions>0,"Expected at least one action")
+    local w=self.Window
+    local row=self:_Row("",29).Row
+    table.insert(self.Controls,{Row=row,Type="ButtonRow"})
+    local buttons={}
+    for i,action in ipairs(actions)do
+        local button=w:_Text(row,action.Text,{Position=UDim2.new((i-1)/#actions,(i-1)*6/#actions,0,0),
+            Size=UDim2.new(1/#actions,-6*(#actions-1)/#actions,1,0),BackgroundTransparency=0,
+            BackgroundColor3="@Raised",TextXAlignment=Enum.TextXAlignment.Center},"TextButton")
+        w:_Bevel(button,i==1)
+        w:_Hover(button)
+        local handle={Label=button,Disabled=false}
+        function handle:Press()
+            if self.Disabled then return end
+            local ok,err=pcall(action.Callback)
+            if not ok then w:Notify("Action failed",tostring(err))end
+        end
+        function handle:SetDisabled(value)
+            self.Disabled=value==true
+            w:_Paint(button,"TextColor3",self.Disabled and "Muted" or "Text")
+        end
+        w:_Connect(button.Activated,function()handle:Press()end)
+        buttons[i]=handle
+    end
+    return buttons
 end
 
 function Section:AddTextbox(options)
